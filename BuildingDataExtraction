@@ -1,0 +1,82 @@
+// Run in Google Earth Engine
+
+// Load China city dataset
+var china_city = ee.FeatureCollection('users/chenxu10371/China_city');
+
+// Define the specific cities to process
+var citiesToProcess = ['cityname']; // List of cities (Chinese names)
+
+// Define the years to extract data, including 2018
+var years = [2005, 2010, 2015, 2018, 2020];
+
+// Initialize result array
+var results = [];
+
+// Loop through each city in the list
+citiesToProcess.forEach(function(cityName) {
+  print('Processing city:', cityName);
+  var studyArea = china_city.filterMetadata('市', 'equals', cityName);
+
+  // Compute total area of the city
+  var cityTotalArea = studyArea.geometry().area();
+  
+  // Loop through years and extract data for the current city
+  years.forEach(function(year) {
+    // Select the appropriate dataset: 10m resolution for 2018, otherwise 100m
+    var builtUpColl = year === 2018 
+      ? ee.ImageCollection('JRC/GHSL/P2023A/GHS_BUILT_S_10m') 
+      : ee.ImageCollection('JRC/GHSL/P2023A/GHS_BUILT_S');
+    
+    var builtUp = builtUpColl
+      .filterDate(ee.Date.fromYMD(year, 1, 1), ee.Date.fromYMD(year, 12, 31))
+      .first();
+
+    // Extract total built-up surface area
+    var totalBuiltUp = builtUp.select('built_surface')
+      .updateMask(builtUp.select('built_surface').gt(0))
+      .reduceRegion({
+        geometry: studyArea,
+        reducer: ee.Reducer.sum(),
+        scale: builtUp.projection().nominalScale(), // 10m for 2018, 100m for others
+        maxPixels: 1e13
+      })
+      .get('built_surface');
+
+    // Extract non-residential built-up surface area
+    var nresBuiltUp = builtUp.select('built_surface')
+      .updateMask(builtUp.select('built_surface_nres').eq(1))
+      .reduceRegion({
+        geometry: studyArea,
+        reducer: ee.Reducer.sum(),
+        scale: builtUp.projection().nominalScale(),
+        maxPixels: 1e13
+      })
+      .get('built_surface');
+
+    // Calculate BUFRAC (building density)
+    var bufrac = ee.Number(totalBuiltUp).divide(cityTotalArea);
+
+    // Push result to array, including city area
+    results.push({
+      city: cityName,
+      year: year,
+      city_area: cityTotalArea,
+      total_built_up: totalBuiltUp,
+      nres_built_up: nresBuiltUp,
+      bufrac: bufrac
+    });
+  });
+});
+
+// Print the aggregated results
+print('Results:', ee.List(results));
+
+// Export all results to a CSV file
+// Export.table.toDrive({
+//   collection: ee.FeatureCollection(results.map(function(result) {
+//     return ee.Feature(null, result);
+//   })),
+//   description: 'Built_Up_Area',
+//   folder: 'GEE_Results',
+//   fileFormat: 'CSV'
+// });
